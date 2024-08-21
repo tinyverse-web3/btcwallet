@@ -1,8 +1,8 @@
 wtxmgr
 ======
 
-[![Build Status](https://travis-ci.org/tinyverse-web3/btcwallet.png?branch=master)]
-(https://travis-ci.org/tinyverse-web3/btcwallet)
+[![Build Status](https://travis-ci.org/btcsuite/btcwallet.png?branch=master)]
+(https://travis-ci.org/btcsuite/btcwallet)
 
 Package wtxmgr provides storage and spend tracking of wallet transactions and
 their relevant input and outputs.
