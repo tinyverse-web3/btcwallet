@@ -228,8 +228,8 @@ git push origin --delete wallet/txrules/v1.2.0
 git tag wallet/txrules/v1.2.0
 git push origin wallet/txrules/v1.2.0
 
-git tag -d wallet/txauthor/v1.3.2
-git push origin --delete wallet/txauthor/v1.3.2
-git tag wallet/txauthor/v1.3.2
-git push origin wallet/txauthor/v1.3.2
+git tag -d wallet/txauthor/v1.3.4
+git push origin --delete wallet/txauthor/v1.3.4
+git tag wallet/txauthor/v1.3.4
+git push origin wallet/txauthor/v1.3.4
 ```
