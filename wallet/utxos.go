@@ -135,7 +135,7 @@ func (w *Wallet) FetchInputInfo(prevOut *wire.OutPoint) (*wire.MsgTx,
 	}
 	pubKeyAddr, ok := addr.(waddrmgr.ManagedPubKeyAddress)
 	if !ok {
-		return nil, nil, nil, 0, err
+		return nil, nil, nil, 0, ErrNotMine
 	}
 	keyScope, derivationPath, _ := pubKeyAddr.DerivationInfo()
 
@@ -143,7 +143,7 @@ func (w *Wallet) FetchInputInfo(prevOut *wire.OutPoint) (*wire.MsgTx,
 	_, currentHeight, err := w.chainClient.GetBestBlock()
 	if err != nil {
 		return nil, nil, nil, 0, fmt.Errorf("unable to retrieve current "+
-			"height: %v", err)
+			"height: %w", err)
 	}
 	confs := int64(0)
 	if txDetail.Block.Height != -1 {

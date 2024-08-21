@@ -6,6 +6,7 @@ package chain
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,12 +40,18 @@ type RPCClient struct {
 	quitMtx sync.Mutex
 }
 
+// A compile-time check to ensure that RPCClient satisfies the chain.Interface
+// interface.
+var _ Interface = (*RPCClient)(nil)
+
 // NewRPCClient creates a client connection to the server described by the
 // connect string.  If disableTLS is false, the remote RPC certificate must be
 // provided in the certs slice.  The connection is not established immediately,
 // but must be done using the Start method.  If the remote server does not
 // operate on the same bitcoin network as described by the passed chain
 // parameters, the connection will be disconnected.
+//
+// TODO(yy): deprecate it in favor of NewRPCClientWithConfig.
 func NewRPCClient(chainParams *chaincfg.Params, connect, user, pass string, certs []byte,
 	disableTLS bool, reconnectAttempts int) (*RPCClient, error) {
 
@@ -83,6 +90,109 @@ func NewRPCClient(chainParams *chaincfg.Params, connect, user, pass string, cert
 	if err != nil {
 		return nil, err
 	}
+	client.Client = rpcClient
+	return client, nil
+}
+
+// RPCClientConfig defines the config options used when initializing the RPC
+// Client.
+type RPCClientConfig struct {
+	// Conn describes the connection configuration parameters for the
+	// client.
+	Conn *rpcclient.ConnConfig
+
+	// Params defines a Bitcoin network by its parameters.
+	Chain *chaincfg.Params
+
+	// NotificationHandlers defines callback function pointers to invoke
+	// with notifications. If not set, the default handlers defined in this
+	// client will be used.
+	NotificationHandlers *rpcclient.NotificationHandlers
+
+	// ReconnectAttempts defines the number to reties (each after an
+	// increasing backoff) if the connection can not be established.
+	ReconnectAttempts int
+}
+
+// validate checks the required config options are set.
+func (r *RPCClientConfig) validate() error {
+	if r == nil {
+		return errors.New("missing rpc config")
+	}
+
+	// Make sure retry attempts is positive.
+	if r.ReconnectAttempts < 0 {
+		return errors.New("reconnectAttempts must be positive")
+	}
+
+	// Make sure the chain params are configed.
+	if r.Chain == nil {
+		return errors.New("missing chain params config")
+	}
+
+	// Make sure connection config is supplied.
+	if r.Conn == nil {
+		return errors.New("missing conn config")
+	}
+
+	// If disableTLS is false, the remote RPC certificate must be provided
+	// in the certs slice.
+	if !r.Conn.DisableTLS && r.Conn.Certificates == nil {
+		return errors.New("must provide certs when TLS is enabled")
+	}
+
+	return nil
+}
+
+// NewRPCClientWithConfig creates a client connection to the server based on
+// the config options supplised.
+//
+// The connection is not established immediately, but must be done using the
+// Start method.  If the remote server does not operate on the same bitcoin
+// network as described by the passed chain parameters, the connection will be
+// disconnected.
+func NewRPCClientWithConfig(cfg *RPCClientConfig) (*RPCClient, error) {
+	// Make sure the config is valid.
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	// Mimic the old behavior defined in `NewRPCClient`. We will remove
+	// these hard-codings once this package is more properly refactored.
+	cfg.Conn.DisableAutoReconnect = false
+	cfg.Conn.DisableConnectOnNew = true
+
+	client := &RPCClient{
+		connConfig:          cfg.Conn,
+		chainParams:         cfg.Chain,
+		reconnectAttempts:   cfg.ReconnectAttempts,
+		enqueueNotification: make(chan interface{}),
+		dequeueNotification: make(chan interface{}),
+		currentBlock:        make(chan *waddrmgr.BlockStamp),
+		quit:                make(chan struct{}),
+	}
+
+	// Use the configed notification callbacks, if not set, default to the
+	// callbacks defined in this package.
+	ntfnCallbacks := cfg.NotificationHandlers
+	if ntfnCallbacks == nil {
+		ntfnCallbacks = &rpcclient.NotificationHandlers{
+			OnClientConnected:   client.onClientConnect,
+			OnBlockConnected:    client.onBlockConnected,
+			OnBlockDisconnected: client.onBlockDisconnected,
+			OnRecvTx:            client.onRecvTx,
+			OnRedeemingTx:       client.onRedeemingTx,
+			OnRescanFinished:    client.onRescanFinished,
+			OnRescanProgress:    client.onRescanProgress,
+		}
+	}
+
+	// Create the RPC client using the above config.
+	rpcClient, err := rpcclient.New(client.connConfig, ntfnCallbacks)
+	if err != nil {
+		return nil, err
+	}
+
 	client.Client = rpcClient
 	return client, nil
 }
@@ -365,7 +475,7 @@ func (c *RPCClient) onRedeemingTx(tx *btcutil.Tx, block *btcjson.BlockDetails) {
 
 func (c *RPCClient) onRescanProgress(hash *chainhash.Hash, height int32, blkTime time.Time) {
 	select {
-	case c.enqueueNotification <- &RescanProgress{hash, height, blkTime}:
+	case c.enqueueNotification <- &RescanProgress{*hash, height, blkTime}:
 	case <-c.quit:
 	}
 }
@@ -460,4 +570,71 @@ func (c *RPCClient) POSTClient() (*rpcclient.Client, error) {
 	configCopy := *c.connConfig
 	configCopy.HTTPPostMode = true
 	return rpcclient.New(&configCopy, nil)
+}
+
+// LookupInputMempoolSpend returns the transaction hash and true if the given
+// input is found being spent in mempool, otherwise it returns nil and false.
+func (c *RPCClient) LookupInputMempoolSpend(op wire.OutPoint) (
+	chainhash.Hash, bool) {
+
+	return getTxSpendingPrevOut(op, c.Client)
+}
+
+// MapRPCErr takes an error returned from calling RPC methods from various
+// chain backends and maps it to an defined error here. It uses the
+// `BtcdErrMap`, whose keys are btcd error strings and values are errors made
+// from bitcoind error strings.
+func (c *RPCClient) MapRPCErr(rpcErr error) error {
+	// Iterate the map and find the matching error.
+	for btcdErr, matchedErr := range BtcdErrMap {
+		// Match it against btcd's error.
+		if matchErrStr(rpcErr, btcdErr) {
+			return matchedErr
+		}
+	}
+
+	// If no matching error is found, we try to match it to an older
+	// version of `btcd`.
+	//
+	// Get the backend's version.
+	backend, bErr := c.BackendVersion()
+	if bErr != nil {
+		// If there's an error getting the backend version, we return
+		// the original error and the backend error.
+		return fmt.Errorf("%w: %v, failed to get backend version %v",
+			ErrUndefined, rpcErr, bErr)
+	}
+
+	// If this version doesn't support `testmempoolaccept`, it must be
+	// below v0.24.2. In this case, we will match the errors defined in
+	// pre-v0.24.2.
+	//
+	// NOTE: `testmempoolaccept` is implemented in v0.24.1, but this
+	// version was never tagged, which means it must be v0.24.2 when it's
+	// supported.
+	if !backend.SupportTestMempoolAccept() {
+		// If the backend is older than v0.24.2, we will try to match
+		// the error to the older version of `btcd`.
+		for btcdErr, matchedErr := range BtcdErrMapPre2402 {
+			// Match it against btcd's error.
+			if matchErrStr(rpcErr, btcdErr) {
+				return matchedErr
+			}
+		}
+	}
+
+	// If not matched, return the original error wrapped.
+	return fmt.Errorf("%w: %v", ErrUndefined, rpcErr)
+}
+
+// SendRawTransaction sends a raw transaction via btcd.
+func (c *RPCClient) SendRawTransaction(tx *wire.MsgTx,
+	allowHighFees bool) (*chainhash.Hash, error) {
+
+	txid, err := c.Client.SendRawTransaction(tx, allowHighFees)
+	if err != nil {
+		return nil, c.MapRPCErr(err)
+	}
+
+	return txid, nil
 }

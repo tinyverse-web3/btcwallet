@@ -6,6 +6,7 @@ package wallet
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/tinyverse-web3/btcd/btcutil"
@@ -82,48 +83,6 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 		amt += output.Value
 	}
 
-	// addInputInfo is a helper function that fetches the UTXO information
-	// of an input and attaches it to the PSBT packet.
-	addInputInfo := func(inputs []*wire.TxIn) error {
-		packet.Inputs = make([]psbt.PInput, len(inputs))
-		for idx, in := range inputs {
-			tx, utxo, derivationPath, _, err := w.FetchInputInfo(
-				&in.PreviousOutPoint,
-			)
-			if err != nil {
-				return fmt.Errorf("error fetching UTXO: %v",
-					err)
-			}
-
-			addr, witnessProgram, _, err := w.ScriptForOutput(utxo)
-			if err != nil {
-				return fmt.Errorf("error fetching UTXO "+
-					"script: %v", err)
-			}
-
-			// We don't want to include the witness or any script
-			// on the unsigned TX just yet.
-			packet.UnsignedTx.TxIn[idx].Witness = wire.TxWitness{}
-			packet.UnsignedTx.TxIn[idx].SignatureScript = nil
-
-			switch {
-			case txscript.IsPayToTaproot(utxo.PkScript):
-				addInputInfoSegWitV1(
-					&packet.Inputs[idx], utxo,
-					derivationPath,
-				)
-
-			default:
-				addInputInfoSegWitV0(
-					&packet.Inputs[idx], tx, utxo,
-					derivationPath, addr, witnessProgram,
-				)
-			}
-		}
-
-		return nil
-	}
-
 	var tx *txauthor.AuthoredTx
 	switch {
 	// We need to do coin selection.
@@ -137,7 +96,7 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 			optFuncs...,
 		)
 		if err != nil {
-			return 0, fmt.Errorf("error creating funding TX: %v",
+			return 0, fmt.Errorf("error creating funding TX: %w",
 				err)
 		}
 
@@ -146,7 +105,16 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 		// include the witness as the resulting PSBT isn't expected not
 		// should be signed yet.
 		packet.UnsignedTx.TxIn = tx.Tx.TxIn
-		err = addInputInfo(tx.Tx.TxIn)
+		packet.Inputs = make([]psbt.PInput, len(packet.UnsignedTx.TxIn))
+
+		for idx := range packet.UnsignedTx.TxIn {
+			// We don't want to include the witness or any script
+			// on the unsigned TX just yet.
+			packet.UnsignedTx.TxIn[idx].Witness = wire.TxWitness{}
+			packet.UnsignedTx.TxIn[idx].SignatureScript = nil
+		}
+
+		err := w.DecorateInputs(packet, true)
 		if err != nil {
 			return 0, err
 		}
@@ -155,7 +123,16 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 	// a change output if necessary.
 	default:
 		// Make sure all inputs provided are actually ours.
-		err = addInputInfo(txIn)
+		packet.Inputs = make([]psbt.PInput, len(packet.UnsignedTx.TxIn))
+
+		for idx := range packet.UnsignedTx.TxIn {
+			// We don't want to include the witness or any script
+			// on the unsigned TX just yet.
+			packet.UnsignedTx.TxIn[idx].Witness = wire.TxWitness{}
+			packet.UnsignedTx.TxIn[idx].SignatureScript = nil
+		}
+
+		err := w.DecorateInputs(packet, true)
 		if err != nil {
 			return 0, err
 		}
@@ -190,6 +167,17 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 			opts.changeKeyScope = keyScope
 		}
 
+		// The addrMgrWithChangeSource function of the wallet creates a
+		// new change address. The address manager uses OnCommit on the
+		// walletdb tx to update the in-memory state of the account
+		// state. But because the commit happens _after_ the account
+		// manager internal lock has been released, there is a chance
+		// for the address index to be accessed concurrently, even
+		// though the closure in OnCommit re-acquires the lock. To avoid
+		// this issue, we surround the whole address creation process
+		// with a lock.
+		w.newAddrMtx.Lock()
+
 		// We also need a change source which needs to be able to insert
 		// a new change address into the database.
 		err = walletdb.Update(w.db, func(dbtx walletdb.ReadWriteTx) error {
@@ -208,14 +196,16 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 			)
 			if err != nil {
 				return fmt.Errorf("fee estimation not "+
-					"successful: %v", err)
+					"successful: %w", err)
 			}
 
 			return nil
 		})
+		w.newAddrMtx.Unlock()
+
 		if err != nil {
 			return 0, fmt.Errorf("could not add change address to "+
-				"database: %v", err)
+				"database: %w", err)
 		}
 	}
 
@@ -247,7 +237,7 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 	// partial inputs and outputs accordingly.
 	err = psbt.InPlaceSort(packet)
 	if err != nil {
-		return 0, fmt.Errorf("could not sort PSBT: %v", err)
+		return 0, fmt.Errorf("could not sort PSBT: %w", err)
 	}
 
 	// The change output index might have changed after the sorting. We need
@@ -263,6 +253,51 @@ func (w *Wallet) FundPsbt(packet *psbt.Packet, keyScope *waddrmgr.KeyScope,
 	}
 
 	return changeIndex, nil
+}
+
+// DecorateInputs fetches the UTXO information of all inputs it can identify and
+// adds the required information to the package's inputs. The failOnUnknown
+// boolean controls whether the method should return an error if it cannot
+// identify an input or if it should just skip it.
+func (w *Wallet) DecorateInputs(packet *psbt.Packet, failOnUnknown bool) error {
+	for idx := range packet.Inputs {
+		txIn := packet.UnsignedTx.TxIn[idx]
+
+		tx, utxo, derivationPath, _, err := w.FetchInputInfo(
+			&txIn.PreviousOutPoint,
+		)
+
+		switch {
+		// If the error just means it's not an input our wallet controls
+		// and the user doesn't care about that, then we can just skip
+		// this input and continue.
+		case errors.Is(err, ErrNotMine) && !failOnUnknown:
+			continue
+
+		case err != nil:
+			return fmt.Errorf("error fetching UTXO: %w", err)
+		}
+
+		addr, witnessProgram, _, err := w.ScriptForOutput(utxo)
+		if err != nil {
+			return fmt.Errorf("error fetching UTXO script: %w", err)
+		}
+
+		switch {
+		case txscript.IsPayToTaproot(utxo.PkScript):
+			addInputInfoSegWitV1(
+				&packet.Inputs[idx], utxo, derivationPath,
+			)
+
+		default:
+			addInputInfoSegWitV0(
+				&packet.Inputs[idx], tx, utxo, derivationPath,
+				addr, witnessProgram,
+			)
+		}
+	}
+
+	return nil
 }
 
 // addInputInfoSegWitV0 adds the UTXO and BIP32 derivation info for a SegWit v0
@@ -478,7 +513,7 @@ func (w *Wallet) FinalizePsbt(keyScope *waddrmgr.KeyScope, account uint32,
 		})
 		if err != nil {
 			return fmt.Errorf("unable to determine if account is "+
-				"watch-only: %v", err)
+				"watch-only: %w", err)
 		}
 		if watchOnly {
 			continue
@@ -489,7 +524,7 @@ func (w *Wallet) FinalizePsbt(keyScope *waddrmgr.KeyScope, account uint32,
 		)
 		if err != nil {
 			return fmt.Errorf("error computing input script for "+
-				"input %d: %v", idx, err)
+				"input %d: %w", idx, err)
 		}
 
 		// Serialize the witness format from the stack representation to
@@ -497,7 +532,7 @@ func (w *Wallet) FinalizePsbt(keyScope *waddrmgr.KeyScope, account uint32,
 		var witnessBytes bytes.Buffer
 		err = psbt.WriteTxWitness(&witnessBytes, witness)
 		if err != nil {
-			return fmt.Errorf("error serializing witness: %v", err)
+			return fmt.Errorf("error serializing witness: %w", err)
 		}
 		packet.Inputs[idx].FinalScriptWitness = witnessBytes.Bytes()
 		packet.Inputs[idx].FinalScriptSig = sigScript
@@ -507,7 +542,7 @@ func (w *Wallet) FinalizePsbt(keyScope *waddrmgr.KeyScope, account uint32,
 	// broadcast.
 	err = psbt.MaybeFinalizeAll(packet)
 	if err != nil {
-		return fmt.Errorf("error finalizing PSBT: %v", err)
+		return fmt.Errorf("error finalizing PSBT: %w", err)
 	}
 
 	return nil
@@ -544,31 +579,4 @@ func PsbtPrevOutputFetcher(packet *psbt.Packet) *txscript.MultiPrevOutFetcher {
 	}
 
 	return fetcher
-}
-
-// constantInputSource creates an input source function that always returns the
-// static set of user-selected UTXOs.
-func constantInputSource(eligible []wtxmgr.Credit) txauthor.InputSource {
-	// Current inputs and their total value. These won't change over
-	// different invocations as we want our inputs to remain static since
-	// they're selected by the user.
-	currentTotal := btcutil.Amount(0)
-	currentInputs := make([]*wire.TxIn, 0, len(eligible))
-	currentScripts := make([][]byte, 0, len(eligible))
-	currentInputValues := make([]btcutil.Amount, 0, len(eligible))
-
-	for _, credit := range eligible {
-		nextInput := wire.NewTxIn(&credit.OutPoint, nil, nil)
-		currentTotal += credit.Amount
-		currentInputs = append(currentInputs, nextInput)
-		currentScripts = append(currentScripts, credit.PkScript)
-		currentInputValues = append(currentInputValues, credit.Amount)
-	}
-
-	return func(target btcutil.Amount) (btcutil.Amount, []*wire.TxIn,
-		[]btcutil.Amount, [][]byte, error) {
-
-		return currentTotal, currentInputs, currentInputValues,
-			currentScripts, nil
-	}
 }

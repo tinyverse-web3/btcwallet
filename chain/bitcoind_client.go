@@ -214,7 +214,37 @@ func (c *BitcoindClient) GetTxOut(txHash *chainhash.Hash, index uint32,
 func (c *BitcoindClient) SendRawTransaction(tx *wire.MsgTx,
 	allowHighFees bool) (*chainhash.Hash, error) {
 
-	return c.chainConn.client.SendRawTransaction(tx, allowHighFees)
+	txid, err := c.chainConn.client.SendRawTransaction(tx, allowHighFees)
+	if err != nil {
+		return nil, c.MapRPCErr(err)
+	}
+
+	return txid, nil
+}
+
+// MapRPCErr takes an error returned from calling RPC methods from various
+// chain backends and maps it to an defined error here.
+func (c *BitcoindClient) MapRPCErr(rpcErr error) error {
+	// Try to match it against bitcoind's error.
+	for i := uint32(0); i < uint32(errSentinel); i++ {
+		err := RPCErr(i)
+		if matchErrStr(rpcErr, err.Error()) {
+			return err
+		}
+	}
+
+	// If not matched, return the original error wrapped.
+	return fmt.Errorf("%w: %v", ErrUndefined, rpcErr)
+}
+
+// TestMempoolAcceptCmd returns result of mempool acceptance tests indicating
+// if raw transaction(s) would be accepted by mempool.
+//
+// NOTE: This is part of the chain.Interface interface.
+func (c *BitcoindClient) TestMempoolAccept(txns []*wire.MsgTx,
+	maxFeeRate float64) ([]*btcjson.TestMempoolAcceptResult, error) {
+
+	return c.chainConn.client.TestMempoolAccept(txns, maxFeeRate)
 }
 
 // Notifications returns a channel to retrieve notifications from.
@@ -320,13 +350,13 @@ func (c *BitcoindClient) NotifyBlocks() error {
 	bestHash, bestHeight, err := c.GetBestBlock()
 	if err != nil {
 		atomic.StoreUint32(&c.notifyBlocks, 0)
-		return fmt.Errorf("unable to retrieve best block: %v", err)
+		return fmt.Errorf("unable to retrieve best block: %w", err)
 	}
 	bestHeader, err := c.GetBlockHeaderVerbose(bestHash)
 	if err != nil {
 		atomic.StoreUint32(&c.notifyBlocks, 0)
 		return fmt.Errorf("unable to retrieve header for best block: "+
-			"%v", err)
+			"%w", err)
 	}
 
 	c.bestBlockMtx.Lock()
@@ -507,12 +537,12 @@ func (c *BitcoindClient) Start() error {
 	// Retrieve the best block of the chain.
 	bestHash, bestHeight, err := c.GetBestBlock()
 	if err != nil {
-		return fmt.Errorf("unable to retrieve best block: %v", err)
+		return fmt.Errorf("unable to retrieve best block: %w", err)
 	}
 	bestHeader, err := c.GetBlockHeaderVerbose(bestHash)
 	if err != nil {
 		return fmt.Errorf("unable to retrieve header for best block: "+
-			"%v", err)
+			"%w", err)
 	}
 
 	c.bestBlockMtx.Lock()
@@ -803,7 +833,7 @@ func (c *BitcoindClient) onRescanProgress(hash *chainhash.Hash, height int32,
 
 	select {
 	case c.notificationQueue.ChanIn() <- &RescanProgress{
-		Hash:   hash,
+		Hash:   *hash,
 		Height: height,
 		Time:   timestamp,
 	}:
@@ -839,7 +869,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 	bestHash := reorgBlock.BlockHash()
 	bestHeight, err := c.GetBlockHeight(&bestHash)
 	if err != nil {
-		return fmt.Errorf("unable to get block height for %v: %v",
+		return fmt.Errorf("unable to get block height for %v: %w",
 			bestHash, err)
 	}
 
@@ -861,7 +891,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 	for i := bestHeight - 1; i >= currentBlock.Height; i-- {
 		block, err := c.GetBlock(&previousBlock)
 		if err != nil {
-			return fmt.Errorf("unable to get block %v: %v",
+			return fmt.Errorf("unable to get block %v: %w",
 				previousBlock, err)
 		}
 		blocksToNotify.PushFront(block)
@@ -875,7 +905,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 	// We'll start by retrieving the header to the best block known to us.
 	currentHeader, err := c.GetBlockHeader(&currentBlock.Hash)
 	if err != nil {
-		return fmt.Errorf("unable to get block header for %v: %v",
+		return fmt.Errorf("unable to get block header for %v: %w",
 			currentBlock.Hash, err)
 	}
 
@@ -898,7 +928,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 		prevBlock := &currentHeader.PrevBlock
 		currentHeader, err = c.GetBlockHeader(prevBlock)
 		if err != nil {
-			return fmt.Errorf("unable to get block header for %v: %v",
+			return fmt.Errorf("unable to get block header for %v: %w",
 				prevBlock, err)
 		}
 
@@ -910,7 +940,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 		// once we've found our common ancestor.
 		block, err := c.GetBlock(&previousBlock)
 		if err != nil {
-			return fmt.Errorf("unable to get block %v: %v",
+			return fmt.Errorf("unable to get block %v: %w",
 				previousBlock, err)
 		}
 		blocksToNotify.PushFront(block)
@@ -936,7 +966,7 @@ func (c *BitcoindClient) reorg(currentBlock waddrmgr.BlockStamp,
 		nextHash := nextBlock.BlockHash()
 		nextHeader, err := c.GetBlockHeader(&nextHash)
 		if err != nil {
-			return fmt.Errorf("unable to get block header for %v: %v",
+			return fmt.Errorf("unable to get block header for %v: %w",
 				nextHash, err)
 		}
 
@@ -1389,4 +1419,12 @@ func (c *BitcoindClient) filterTx(txDetails *btcutil.Tx,
 	c.onRelevantTx(rec, blockDetails)
 
 	return true, rec, nil
+}
+
+// LookupInputMempoolSpend returns the transaction hash and true if the given
+// input is found being spent in mempool, otherwise it returns nil and false.
+func (c *BitcoindClient) LookupInputMempoolSpend(op wire.OutPoint) (
+	chainhash.Hash, bool) {
+
+	return c.chainConn.events.LookupInputSpend(op)
 }

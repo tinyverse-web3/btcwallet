@@ -305,6 +305,15 @@ func (w *Wallet) ImportAccountDryRun(name string,
 	*waddrmgr.AccountProperties, []waddrmgr.ManagedAddress,
 	[]waddrmgr.ManagedAddress, error) {
 
+	// The address manager uses OnCommit on the walletdb tx to update the
+	// in-memory state of the account state. But because the commit happens
+	// _after_ the account manager internal lock has been released, there
+	// is a chance for the address index to be accessed concurrently, even
+	// though the closure in OnCommit re-acquires the lock. To avoid this
+	// issue, we surround the whole address creation process with a lock.
+	w.newAddrMtx.Lock()
+	defer w.newAddrMtx.Unlock()
+
 	var (
 		accountProps  *waddrmgr.AccountProperties
 		externalAddrs []waddrmgr.ManagedAddress
@@ -421,7 +430,7 @@ func (w *Wallet) ImportPublicKey(pubKey *btcec.PublicKey,
 	err = w.chainClient.NotifyReceived([]btcutil.Address{addr.Address()})
 	if err != nil {
 		return fmt.Errorf("unable to subscribe for address "+
-			"notifications: %v", err)
+			"notifications: %w", err)
 	}
 
 	return nil
@@ -474,7 +483,7 @@ func (w *Wallet) ImportTaprootScript(scope waddrmgr.KeyScope,
 	err = w.chainClient.NotifyReceived([]btcutil.Address{addr.Address()})
 	if err != nil {
 		return nil, fmt.Errorf("unable to subscribe for address "+
-			"notifications: %v", err)
+			"notifications: %w", err)
 	}
 
 	return addr, nil
@@ -571,7 +580,7 @@ func (w *Wallet) ImportPrivateKey(scope waddrmgr.KeyScope, wif *btcutil.WIF,
 		err := w.chainClient.NotifyReceived([]btcutil.Address{addr})
 		if err != nil {
 			return "", fmt.Errorf("failed to subscribe for address ntfns for "+
-				"address %s: %s", addr.EncodeAddress(), err)
+				"address %s: %w", addr.EncodeAddress(), err)
 		}
 	}
 

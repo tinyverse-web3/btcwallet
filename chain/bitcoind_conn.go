@@ -1,10 +1,13 @@
 package chain
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/lightningnetwork/lnd/ticker"
 	"github.com/tinyverse-web3/btcd/btcjson"
@@ -38,7 +41,20 @@ const (
 	// errBlockPrunedStr is the error message returned by bitcoind upon
 	// calling GetBlock on a pruned block.
 	errBlockPrunedStr = "Block not available (pruned data)"
+
+	// errStillLoadingCode is the error code returned when an RPC request
+	// is made but bitcoind is still in the process of loading or verifying
+	// blocks.
+	errStillLoadingCode = "-28"
+
+	// bitcoindStartTimeout is the time we wait for bitcoind to finish
+	// loading and verifying blocks and become ready to serve RPC requests.
+	bitcoindStartTimeout = 30 * time.Second
 )
+
+// ErrBitcoindStartTimeout is returned when the bitcoind daemon fails to load
+// and verify blocks under 30s during startup.
+var ErrBitcoindStartTimeout = errors.New("bitcoind start timeout")
 
 // BitcoindConfig contains all of the parameters required to establish a
 // connection to a bitcoind's RPC.
@@ -135,6 +151,11 @@ func NewBitcoindConn(cfg *BitcoindConfig) (*BitcoindConn, error) {
 		return nil, err
 	}
 
+	batchClient, err := rpcclient.NewBatch(clientCfg)
+	if err != nil {
+		return nil, err
+	}
+
 	// Verify that the node is running on the expected network.
 	net, err := getCurrentNet(client)
 	if err != nil {
@@ -150,7 +171,7 @@ func NewBitcoindConn(cfg *BitcoindConfig) (*BitcoindConn, error) {
 	chainInfo, err := client.GetBlockChainInfo()
 	if err != nil {
 		return nil, fmt.Errorf("unable to determine if bitcoind is "+
-			"pruned: %v", err)
+			"pruned: %w", err)
 	}
 
 	// Only initialize the PrunedBlockDispatcher when the connected bitcoind
@@ -182,7 +203,7 @@ func NewBitcoindConn(cfg *BitcoindConfig) (*BitcoindConn, error) {
 		quit:                  make(chan struct{}),
 	}
 
-	bc.events, err = NewBitcoindEventSubscriber(cfg, client)
+	bc.events, err = NewBitcoindEventSubscriber(cfg, client, batchClient)
 	if err != nil {
 		return nil, err
 	}
@@ -306,9 +327,57 @@ func (c *BitcoindConn) sendTxToClients() {
 	}
 }
 
+// getBlockHashDuringStartup is used to call the getblockhash RPC during
+// startup. It catches the case where bitcoind is still in the process of
+// loading blocks, which returns the following error,
+// - "-28: Loading block index..."
+// - "-28: Verifying blocks..."
+// In this case we'd retry every second until we time out after 30 seconds.
+func getBlockHashDuringStartup(
+	client *rpcclient.Client) (*chainhash.Hash, error) {
+
+	hash, err := client.GetBlockHash(0)
+
+	// Exit early if there's no error.
+	if err == nil {
+		return hash, nil
+	}
+
+	// If the error doesn't start with "-28", it's an unexpected error so
+	// we exit with it.
+	if !strings.Contains(err.Error(), errStillLoadingCode) {
+		return nil, err
+	}
+
+	// Starts the timeout ticker(30s).
+	timeout := time.After(bitcoindStartTimeout)
+
+	// Otherwise, we'd retry calling getblockhash or time out after 30s.
+	for {
+		select {
+		case <-timeout:
+			return nil, ErrBitcoindStartTimeout
+
+		// Retry every second.
+		case <-time.After(1 * time.Second):
+			hash, err = client.GetBlockHash(0)
+			// If there's no error, we return the hash.
+			if err == nil {
+				return hash, nil
+			}
+
+			// Otherwise, retry until we time out. We also check if
+			// the error returned here is still expected.
+			if !strings.Contains(err.Error(), errStillLoadingCode) {
+				return nil, err
+			}
+		}
+	}
+}
+
 // getCurrentNet returns the network on which the bitcoind node is running.
 func getCurrentNet(client *rpcclient.Client) (wire.BitcoinNet, error) {
-	hash, err := client.GetBlockHash(0)
+	hash, err := getBlockHashDuringStartup(client)
 	if err != nil {
 		return 0, err
 	}
@@ -400,10 +469,16 @@ func (c *BitcoindConn) GetBlock(hash *chainhash.Hash) (*wire.MsgBlock, error) {
 		return nil, err
 	}
 
+	// cancelChan is needed in case a block request with the same hash is
+	// already registered and fails via the returned errChan. Because we
+	// don't register a new request in this case this cancelChan is used
+	// to signal the failure of the dependant block request.
+	cancelChan := make(chan error, 1)
+
 	// Now that we know the block has been pruned for sure, request it from
 	// our backend peers.
 	blockChan, errChan := c.prunedBlockDispatcher.Query(
-		[]*chainhash.Hash{hash},
+		[]*chainhash.Hash{hash}, cancelChan,
 	)
 
 	for {
@@ -413,11 +488,31 @@ func (c *BitcoindConn) GetBlock(hash *chainhash.Hash) (*wire.MsgBlock, error) {
 
 		case err := <-errChan:
 			if err != nil {
+				// An error was returned for this block request.
+				// We have to make sure we remove the blockhash
+				// from the list of queried blocks.
+				// Moreover because in case a block is requested
+				// more than once no redundant block requests
+				// are registered but rather a reply channel is
+				// added to the pending block request. This
+				// means we need to cancel all dependent
+				// `GetBlock` calls via the cancel channel when
+				// the fetching of the block was NOT successful.
+				c.prunedBlockDispatcher.CancelRequest(
+					*hash, err,
+				)
+
 				return nil, err
 			}
 
 			// errChan fired before blockChan with a nil error, wait
 			// for the block now.
+
+		// The cancelChan is only used when there is already a pending
+		// block request for this hash and that block request fails via
+		// the error channel above.
+		case err := <-cancelChan:
+			return nil, err
 
 		case <-c.quit:
 			return nil, ErrBitcoindClientShuttingDown

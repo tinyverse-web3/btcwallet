@@ -3,6 +3,7 @@ package wallet
 import (
 	"time"
 
+	"github.com/tinyverse-web3/btcd/btcjson"
 	"github.com/tinyverse-web3/btcd/btcutil"
 	"github.com/tinyverse-web3/btcd/chaincfg/chainhash"
 	"github.com/tinyverse-web3/btcd/wire"
@@ -82,4 +83,18 @@ func (m *mockChainClient) Notifications() <-chan interface{} {
 
 func (m *mockChainClient) BackEnd() string {
 	return "mock"
+}
+
+// TestMempoolAcceptCmd returns result of mempool acceptance tests indicating
+// if raw transaction(s) would be accepted by mempool.
+//
+// NOTE: This is part of the chain.Interface interface.
+func (m *mockChainClient) TestMempoolAccept(txns []*wire.MsgTx,
+	maxFeeRate float64) ([]*btcjson.TestMempoolAcceptResult, error) {
+
+	return nil, nil
+}
+
+func (m *mockChainClient) MapRPCErr(err error) error {
+	return nil
 }

@@ -46,6 +46,14 @@ type ZMQConfig struct {
 	//
 	// TODO(yy): replace this temp config with SEQUENCE check.
 	PollingIntervalJitter float64
+
+	// RPCBatchSize defines the number of RPC requests to be batches before
+	// sending them to the bitcoind node.
+	RPCBatchSize uint32
+
+	// RPCBatchInterval defines the time to wait before attempting the next
+	// batch when the current one finishes.
+	RPCBatchInterval time.Duration
 }
 
 // bitcoindZMQEvents delivers block and transaction notifications that it gets
@@ -68,8 +76,16 @@ type bitcoindZMQEvents struct {
 
 	// mempool holds all the transactions that we currently see as being in
 	// the mempool. This is used so that we know which transactions we have
-	// already sent notifications for.
+	// already sent notifications for. This will be nil if we are using the
+	// gettxspendingprevout endpoint.
 	mempool *mempool
+
+	// client is an rpc client to the bitcoind backend.
+	client *rpcclient.Client
+
+	// hasPrevoutRPC is set when the bitcoind version is >= 24.0.0 and
+	// doesn't need to maintain its own mempool.
+	hasPrevoutRPC bool
 
 	wg   sync.WaitGroup
 	quit chan struct{}
@@ -80,8 +96,10 @@ type bitcoindZMQEvents struct {
 var _ BitcoindEvents = (*bitcoindZMQEvents)(nil)
 
 // newBitcoindZMQEvents initialises the necessary zmq connections to bitcoind.
-func newBitcoindZMQEvents(cfg *ZMQConfig,
-	client *rpcclient.Client) (*bitcoindZMQEvents, error) {
+// If bitcoind is on a version with the gettxspendingprevout RPC, we can omit
+// the mempool.
+func newBitcoindZMQEvents(cfg *ZMQConfig, client *rpcclient.Client,
+	bClient batchClient, hasRPC bool) (*bitcoindZMQEvents, error) {
 
 	// Check polling config.
 	if cfg.MempoolPollingInterval == 0 {
@@ -105,7 +123,7 @@ func newBitcoindZMQEvents(cfg *ZMQConfig,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("unable to subscribe for zmq block "+
-			"events: %v", err)
+			"events: %w", err)
 	}
 
 	zmqTxConn, err := gozmq.Subscribe(
@@ -119,25 +137,49 @@ func newBitcoindZMQEvents(cfg *ZMQConfig,
 		}
 
 		return nil, fmt.Errorf("unable to subscribe for zmq tx "+
-			"events: %v", err)
+			"events: %w", err)
 	}
 
-	return &bitcoindZMQEvents{
-		cfg:        cfg,
-		blockConn:  zmqBlockConn,
-		txConn:     zmqTxConn,
-		blockNtfns: make(chan *wire.MsgBlock),
-		txNtfns:    make(chan *wire.MsgTx),
-		mempool:    newMempool(client),
-		quit:       make(chan struct{}),
-	}, nil
+	// Create the config for mempool and attach default values if not
+	// configed.
+	mCfg := &mempoolConfig{
+		client:            bClient,
+		getRawTxBatchSize: cfg.RPCBatchSize,
+		batchWaitInterval: cfg.RPCBatchInterval,
+	}
+
+	if cfg.RPCBatchSize == 0 {
+		mCfg.getRawTxBatchSize = DefaultGetRawTxBatchSize
+	}
+
+	if cfg.RPCBatchInterval == 0 {
+		mCfg.batchWaitInterval = DefaultBatchWaitInterval
+	}
+
+	zmqEvents := &bitcoindZMQEvents{
+		cfg:           cfg,
+		client:        client,
+		blockConn:     zmqBlockConn,
+		txConn:        zmqTxConn,
+		hasPrevoutRPC: hasRPC,
+		blockNtfns:    make(chan *wire.MsgBlock),
+		txNtfns:       make(chan *wire.MsgTx),
+		mempool:       newMempool(mCfg),
+		quit:          make(chan struct{}),
+	}
+
+	return zmqEvents, nil
+
 }
 
 // Start spins off the bitcoindZMQEvent goroutines.
 func (b *bitcoindZMQEvents) Start() error {
-	// Load the mempool so we don't miss transactions.
-	if err := b.mempool.LoadMempool(); err != nil {
-		return err
+	// Load the mempool so we don't miss transactions, but only if we need
+	// one.
+	if !b.hasPrevoutRPC {
+		if err := b.mempool.LoadMempool(); err != nil {
+			return err
+		}
 	}
 
 	b.wg.Add(3)
@@ -150,6 +192,8 @@ func (b *bitcoindZMQEvents) Start() error {
 
 // Stop cleans up any of the resources and goroutines held by bitcoindZMQEvents.
 func (b *bitcoindZMQEvents) Stop() error {
+	b.mempool.Shutdown()
+
 	var returnErr error
 	if err := b.txConn.Close(); err != nil {
 		returnErr = err
@@ -179,11 +223,17 @@ func (b *bitcoindZMQEvents) BlockNotifications() <-chan *wire.MsgBlock {
 func (b *bitcoindZMQEvents) LookupInputSpend(
 	op wire.OutPoint) (chainhash.Hash, bool) {
 
-	b.mempool.RLock()
-	defer b.mempool.RUnlock()
+	if !b.hasPrevoutRPC {
+		b.mempool.RLock()
+		defer b.mempool.RUnlock()
 
-	// Check whether the input is in mempool.
-	return b.mempool.containsInput(op)
+		// Check whether the input is in mempool.
+		return b.mempool.containsInput(op)
+	}
+
+	// Otherwise, we aren't maintaining a mempool and can use the
+	// gettxspendingprevout RPC.
+	return getTxSpendingPrevOut(op, b.client)
 }
 
 // blockEventHandler reads raw blocks events from the ZMQ block socket and
@@ -358,8 +408,10 @@ func (b *bitcoindZMQEvents) txEventHandler() {
 				continue
 			}
 
-			// Add the tx to mempool.
-			b.mempool.Add(tx)
+			// Add the tx to mempool if we're using one.
+			if !b.hasPrevoutRPC {
+				b.mempool.Add(tx)
+			}
 
 			select {
 			case b.txNtfns <- tx:
@@ -386,6 +438,11 @@ func (b *bitcoindZMQEvents) txEventHandler() {
 func (b *bitcoindZMQEvents) mempoolPoller() {
 	defer b.wg.Done()
 
+	if b.hasPrevoutRPC {
+		// Exit if we're not using a mempool.
+		return
+	}
+
 	// We'll wait to start the main reconciliation loop until we're doing
 	// the initial mempool load.
 	b.mempool.WaitForInit()
@@ -403,28 +460,53 @@ func (b *bitcoindZMQEvents) mempoolPoller() {
 	for {
 		select {
 		case <-ticker.C:
-			log.Debugf("Reconciling mempool spends with node " +
+			log.Tracef("Reconciling mempool spends with node " +
 				"mempool...")
 
 			now := time.Now()
 
 			// After each ticker interval, we poll the mempool to
-			// check for transactions we haven't seen yet.
-			txs, err := b.mempool.client.GetRawMempool()
-			if err != nil {
-				log.Errorf("Unable to retrieve mempool txs: "+
-					"%v", err)
-				continue
-			}
+			// check for transactions we haven't seen yet and
+			// update our local mempool with the new mempool.
+			b.mempool.UpdateMempoolTxes()
 
-			// Update our local mempool with the new mempool.
-			b.mempool.UpdateMempoolTxes(txs)
-
-			log.Debugf("Reconciled mempool spends in %v",
+			log.Tracef("Reconciled mempool spends in %v",
 				time.Since(now))
 
 		case <-b.quit:
 			return
 		}
 	}
+}
+
+// getTxSpendingPrevOut makes an RPC call to `gettxspendingprevout` and returns
+// the result.
+func getTxSpendingPrevOut(op wire.OutPoint,
+	client *rpcclient.Client) (chainhash.Hash, bool) {
+
+	prevoutResps, err := client.GetTxSpendingPrevOut([]wire.OutPoint{op})
+	if err != nil {
+		return chainhash.Hash{}, false
+	}
+
+	// We should only get a single item back since we only requested with a
+	// single item.
+	if len(prevoutResps) != 1 {
+		return chainhash.Hash{}, false
+	}
+
+	result := prevoutResps[0]
+
+	// If the "spendingtxid" field is empty, then the utxo has no spend in
+	// the mempool at the moment.
+	if result.SpendingTxid == "" {
+		return chainhash.Hash{}, false
+	}
+
+	spendHash, err := chainhash.NewHashFromStr(result.SpendingTxid)
+	if err != nil {
+		return chainhash.Hash{}, false
+	}
+
+	return *spendHash, true
 }

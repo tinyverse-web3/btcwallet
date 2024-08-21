@@ -1,5 +1,7 @@
 module github.com/tinyverse-web3/btcwallet
 
+go 1.22.1
+
 require (
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792
@@ -51,5 +53,3 @@ require (
 	google.golang.org/protobuf v1.23.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-go 1.22.1

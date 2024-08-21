@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tinyverse-web3/btcd/btcjson"
 	"github.com/tinyverse-web3/btcd/btcutil"
 	"github.com/tinyverse-web3/btcd/btcutil/gcs"
 	"github.com/tinyverse-web3/btcd/btcutil/gcs/builder"
@@ -20,14 +21,25 @@ import (
 	"github.com/tinyverse-web3/neutrino/headerfs"
 )
 
-// NeutrinoClient is an implementation of the btcwalet chain.Interface interface.
+// ErrUnimplemented is returned when a certain method is not implemented for a
+// given interface.
+var ErrUnimplemented = errors.New("unimplemented")
+
+// NeutrinoClient is an implementation of the btcwallet chain.Interface interface.
 type NeutrinoClient struct {
-	CS *neutrino.ChainService
+	CS NeutrinoChainService
 
 	chainParams *chaincfg.Params
 
-	// We currently support one rescan/notifiction goroutine per client
-	rescan *neutrino.Rescan
+	// We currently support only one rescan/notification goroutine per client.
+	// Therefore there can only be one instance of the rescan object and
+	// the rescanMtx synchronizes its access.  Calls to the NotifyReceived
+	// and Rescan methods of the client must hold the rescan mutex lock for
+	// the length of their execution to ensure that all operations that
+	// affect the rescan object are atomic.
+	rescan    rescanner
+	newRescan newRescanFunc
+	rescanMtx sync.Mutex
 
 	enqueueNotification     chan interface{}
 	dequeueNotification     chan interface{}
@@ -45,17 +57,41 @@ type NeutrinoClient struct {
 	finished   bool
 	isRescan   bool
 
+	// The clientMtx synchronizes access to the state variables of the client.
+	//
+	// TODO(mstreet3): Currently the clientMtx synchronizes access to the
+	// rescanQuit and rescanErr channels, which cancel the current rescan
+	// goroutine when closed and is updated each time a new rescan goroutine
+	// is created, respectively.  All state related to the rescan goroutine
+	// should ideally be synchronized by the same lock or via some other
+	// shared mechanism.
 	clientMtx sync.Mutex
 }
+
+// A compile-time check to ensure that RPCClient satisfies the chain.Interface
+// interface.
+var _ Interface = (*NeutrinoClient)(nil)
 
 // NewNeutrinoClient creates a new NeutrinoClient struct with a backing
 // ChainService.
 func NewNeutrinoClient(chainParams *chaincfg.Params,
 	chainService *neutrino.ChainService) *NeutrinoClient {
 
+	chainSource := &neutrino.RescanChainSource{
+		ChainService: chainService,
+	}
+
+	// Adapt the neutrino.NewRescan constructor to satisfy the
+	// newRescanFunc type by closing over the chainSource and
+	// passing in the rescan options.
+	newRescan := func(ropts ...neutrino.RescanOption) rescanner {
+		return neutrino.NewRescan(chainSource, ropts...)
+	}
+
 	return &NeutrinoClient{
 		CS:          chainService,
 		chainParams: chainParams,
+		newRescan:   newRescan,
 	}
 }
 
@@ -67,30 +103,42 @@ func (s *NeutrinoClient) BackEnd() string {
 // Start replicates the RPC client's Start method.
 func (s *NeutrinoClient) Start() error {
 	if err := s.CS.Start(); err != nil {
-		return fmt.Errorf("error starting chain service: %v", err)
+		return fmt.Errorf("error starting chain service: %w", err)
 	}
 
 	s.clientMtx.Lock()
 	defer s.clientMtx.Unlock()
 	if !s.started {
+		// Reset the client state.
 		s.enqueueNotification = make(chan interface{})
 		s.dequeueNotification = make(chan interface{})
 		s.currentBlock = make(chan *waddrmgr.BlockStamp)
 		s.quit = make(chan struct{})
 		s.started = true
+
+		// Go place a ClientConnected notification onto the queue.
 		s.wg.Add(1)
 		go func() {
+			defer s.wg.Done()
+
 			select {
 			case s.enqueueNotification <- ClientConnected{}:
 			case <-s.quit:
 			}
 		}()
+
+		// Go launch the notification handler.
+		s.wg.Add(1)
 		go s.notificationHandler()
 	}
 	return nil
 }
 
 // Stop replicates the RPC client's Stop method.
+//
+// TODO(mstreet3): The Stop method does not cancel the long-running rescan
+// goroutine.  This is a memory leak.  Stop should shutdown the rescan goroutine
+// and reset the scanning state of the NeutrinoClient to false.
 func (s *NeutrinoClient) Stop() {
 	s.clientMtx.Lock()
 	defer s.clientMtx.Unlock()
@@ -172,10 +220,20 @@ func (s *NeutrinoClient) SendRawTransaction(tx *wire.MsgTx, allowHighFees bool) 
 	*chainhash.Hash, error) {
 	err := s.CS.SendTransaction(tx)
 	if err != nil {
-		return nil, err
+		return nil, s.MapRPCErr(err)
 	}
 	hash := tx.TxHash()
 	return &hash, nil
+}
+
+// TestMempoolAcceptCmd returns result of mempool acceptance tests indicating
+// if raw transaction(s) would be accepted by mempool.
+//
+// NOTE: This is part of the chain.Interface interface.
+func (s *NeutrinoClient) TestMempoolAccept(txns []*wire.MsgTx,
+	maxFeeRate float64) ([]*btcjson.TestMempoolAcceptResult, error) {
+
+	return nil, ErrUnimplemented
 }
 
 // FilterBlocks scans the blocks contained in the FilterBlocksRequest for any
@@ -338,6 +396,10 @@ func (s *NeutrinoClient) pollCFilter(hash *chainhash.Hash) (*gcs.Filter, error) 
 func (s *NeutrinoClient) Rescan(startHash *chainhash.Hash, addrs []btcutil.Address,
 	outPoints map[wire.OutPoint]btcutil.Address) error {
 
+	// Obtain and hold the rescan mutex lock for the duration of the call.
+	s.rescanMtx.Lock()
+	defer s.rescanMtx.Unlock()
+
 	s.clientMtx.Lock()
 	if !s.started {
 		s.clientMtx.Unlock()
@@ -364,11 +426,11 @@ func (s *NeutrinoClient) Rescan(startHash *chainhash.Hash, addrs []btcutil.Addre
 
 	bestBlock, err := s.CS.BestBlock()
 	if err != nil {
-		return fmt.Errorf("can't get chain service's best block: %s", err)
+		return fmt.Errorf("can't get chain service's best block: %w", err)
 	}
 	header, err := s.CS.GetBlockHeader(&bestBlock.Hash)
 	if err != nil {
-		return fmt.Errorf("can't get block header for hash %v: %s",
+		return fmt.Errorf("can't get block header for hash %v: %w",
 			bestBlock.Hash, err)
 	}
 
@@ -411,10 +473,7 @@ func (s *NeutrinoClient) Rescan(startHash *chainhash.Hash, addrs []btcutil.Addre
 	}
 
 	s.clientMtx.Lock()
-	newRescan := neutrino.NewRescan(
-		&neutrino.RescanChainSource{
-			ChainService: s.CS,
-		},
+	newRescan := s.newRescan(
 		neutrino.NotificationHandlers(rpcclient.NotificationHandlers{
 			OnBlockConnected:         s.onBlockConnected,
 			OnFilteredBlockConnected: s.onFilteredBlockConnected,
@@ -448,6 +507,10 @@ func (s *NeutrinoClient) NotifyBlocks() error {
 
 // NotifyReceived replicates the RPC client's NotifyReceived command.
 func (s *NeutrinoClient) NotifyReceived(addrs []btcutil.Address) error {
+	// Obtain and hold the rescan mutex lock for the duration of the call.
+	s.rescanMtx.Lock()
+	defer s.rescanMtx.Unlock()
+
 	s.clientMtx.Lock()
 
 	// If we have a rescan running, we just need to add the appropriate
@@ -466,10 +529,7 @@ func (s *NeutrinoClient) NotifyReceived(addrs []btcutil.Address) error {
 	s.lastFilteredBlockHeader = nil
 
 	// Rescan with just the specified addresses.
-	newRescan := neutrino.NewRescan(
-		&neutrino.RescanChainSource{
-			ChainService: s.CS,
-		},
+	newRescan := s.newRescan(
 		neutrino.NotificationHandlers(rpcclient.NotificationHandlers{
 			OnBlockConnected:         s.onBlockConnected,
 			OnFilteredBlockConnected: s.onFilteredBlockConnected,
@@ -568,7 +628,7 @@ func (s *NeutrinoClient) onBlockConnected(hash *chainhash.Hash, height int32,
 	sendRescanProgress := func() {
 		select {
 		case s.enqueueNotification <- &RescanProgress{
-			Hash:   hash,
+			Hash:   *hash,
 			Height: height,
 			Time:   time,
 		}:
@@ -754,4 +814,33 @@ out:
 	s.Stop()
 	close(s.dequeueNotification)
 	s.wg.Done()
+}
+
+// MapRPCErr takes an error returned from calling RPC methods from various
+// chain backends and maps it to an defined error here. It uses the
+// `BtcdErrMap`, whose keys are btcd error strings and values are errors made
+// from bitcoind error strings.
+//
+// NOTE: we assume neutrino shares the same error strings as btcd.
+func (s *NeutrinoClient) MapRPCErr(rpcErr error) error {
+	// Iterate the map and find the matching error.
+	for btcdErr, matchedErr := range BtcdErrMap {
+		// Match it against btcd's error.
+		if matchErrStr(rpcErr, btcdErr) {
+			return matchedErr
+		}
+	}
+
+	// Neutrino doesn't support version check, we will try to match the
+	// errors from the older version of `btcd`, which are also used by
+	// neutrino.
+	for btcdErr, matchedErr := range BtcdErrMapPre2402 {
+		// Match it against btcd's error.
+		if matchErrStr(rpcErr, btcdErr) {
+			return matchedErr
+		}
+	}
+
+	// If not matched, return the original error wrapped.
+	return fmt.Errorf("%w: %v", ErrUndefined, rpcErr)
 }
