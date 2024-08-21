@@ -218,15 +218,15 @@ git push origin --delete walletdb/v1.4.2
 git tag walletdb/v1.4.2
 git push origin walletdb/v1.4.2
 
-git tag -d wallet/txsizes/v1.2.3
-git push origin --delete wallet/txsizes/v1.2.3
-git tag wallet/txsizes/v1.2.3
-git push origin wallet/txsizes/v1.2.3
+git tag -d wallet/txsizes/v1.2.4
+git push origin --delete wallet/txsizes/v1.2.4
+git tag wallet/txsizes/v1.2.4
+git push origin wallet/txsizes/v1.2.4
 
-git tag -d wallet/txrules/v1.2.0
-git push origin --delete wallet/txrules/v1.2.0
-git tag wallet/txrules/v1.2.0
-git push origin wallet/txrules/v1.2.0
+git tag -d wallet/txrules/v1.2.1
+git push origin --delete wallet/txrules/v1.2.1
+git tag wallet/txrules/v1.2.1
+git push origin wallet/txrules/v1.2.1
 
 git tag -d wallet/txauthor/v1.3.4
 git push origin --delete wallet/txauthor/v1.3.4
