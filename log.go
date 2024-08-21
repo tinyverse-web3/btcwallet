@@ -12,13 +12,13 @@ import (
 
 	"github.com/btcsuite/btclog"
 	"github.com/jrick/logrotate/rotator"
-	"github.com/lightninglabs/neutrino"
 	"github.com/tinyverse-web3/btcd/rpcclient"
 	"github.com/tinyverse-web3/btcwallet/chain"
 	"github.com/tinyverse-web3/btcwallet/rpc/legacyrpc"
 	"github.com/tinyverse-web3/btcwallet/rpc/rpcserver"
 	"github.com/tinyverse-web3/btcwallet/wallet"
 	"github.com/tinyverse-web3/btcwallet/wtxmgr"
+	"github.com/tinyverse-web3/neutrino"
 )
 
 // logWriter implements an io.Writer that outputs to both standard output and

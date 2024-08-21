@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/lightninglabs/neutrino/cache/lru"
 	"github.com/tinyverse-web3/btcd/btcec/v2"
 	"github.com/tinyverse-web3/btcd/btcec/v2/schnorr"
 	"github.com/tinyverse-web3/btcd/btcutil"
@@ -17,6 +16,7 @@ import (
 	"github.com/tinyverse-web3/btcwallet/internal/zero"
 	"github.com/tinyverse-web3/btcwallet/netparams"
 	"github.com/tinyverse-web3/btcwallet/walletdb"
+	"github.com/tinyverse-web3/neutrino/cache/lru"
 )
 
 // HDVersion represents the different supported schemes of hierarchical

@@ -17,13 +17,13 @@ import (
 	"time"
 
 	flags "github.com/jessevdk/go-flags"
-	"github.com/lightninglabs/neutrino"
 	"github.com/tinyverse-web3/btcd/btcutil"
 	"github.com/tinyverse-web3/btcd/chaincfg"
 	"github.com/tinyverse-web3/btcwallet/internal/cfgutil"
 	"github.com/tinyverse-web3/btcwallet/internal/legacy/keystore"
 	"github.com/tinyverse-web3/btcwallet/netparams"
 	"github.com/tinyverse-web3/btcwallet/wallet"
+	"github.com/tinyverse-web3/neutrino"
 )
 
 const (

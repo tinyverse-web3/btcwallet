@@ -203,10 +203,10 @@ go list -m -versions github.com/tinyverse-web3/btcwallet/wallet/txsizes
 go list -m -versions github.com/tinyverse-web3/btcwallet/wallet/txrules
 go list -m -versions github.com/tinyverse-web3/btcwallet/wallet/txauthor
 
-git tag -d v0.16.9
-git push origin --delete v0.16.9
-git tag v0.16.9
-git push origin v0.16.9
+git tag -d v0.16.11
+git push origin --delete v0.16.11
+git tag v0.16.11
+git push origin v0.16.11
 
 git tag -d wtxmgr/v1.5.3
 git push origin --delete wtxmgr/v1.5.3

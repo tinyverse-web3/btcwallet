@@ -13,11 +13,11 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/lightninglabs/neutrino"
 	"github.com/tinyverse-web3/btcwallet/chain"
 	"github.com/tinyverse-web3/btcwallet/rpc/legacyrpc"
 	"github.com/tinyverse-web3/btcwallet/wallet"
 	"github.com/tinyverse-web3/btcwallet/walletdb"
+	"github.com/tinyverse-web3/neutrino"
 )
 
 var (

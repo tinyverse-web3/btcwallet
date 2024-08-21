@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lightninglabs/neutrino/cache/lru"
 	"github.com/tinyverse-web3/btcd/btcutil"
 	"github.com/tinyverse-web3/btcd/btcutil/hdkeychain"
 	"github.com/tinyverse-web3/btcd/chaincfg"
 	"github.com/tinyverse-web3/btcwallet/internal/zero"
 	"github.com/tinyverse-web3/btcwallet/snacl"
 	"github.com/tinyverse-web3/btcwallet/walletdb"
+	"github.com/tinyverse-web3/neutrino/cache/lru"
 )
 
 const (

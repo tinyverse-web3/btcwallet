@@ -6,8 +6,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lightninglabs/neutrino"
-	"github.com/lightninglabs/neutrino/headerfs"
 	"github.com/tinyverse-web3/btcd/btcutil"
 	"github.com/tinyverse-web3/btcd/btcutil/gcs"
 	"github.com/tinyverse-web3/btcd/btcutil/gcs/builder"
@@ -18,6 +16,8 @@ import (
 	"github.com/tinyverse-web3/btcd/wire"
 	"github.com/tinyverse-web3/btcwallet/waddrmgr"
 	"github.com/tinyverse-web3/btcwallet/wtxmgr"
+	"github.com/tinyverse-web3/neutrino"
+	"github.com/tinyverse-web3/neutrino/headerfs"
 )
 
 // NeutrinoClient is an implementation of the btcwalet chain.Interface interface.
