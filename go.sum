@@ -98,8 +98,8 @@ github.com/stretchr/testify v1.9.0 h1:HtqpIVDClZ4nwg75+f6Lvsy/wHu+3BoSGCbBAcpTsT
 github.com/stretchr/testify v1.9.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7/go.mod h1:q4W45IWZaF22tdD+VEXcAWRA037jwmWEB5VWYORlTpc=
-github.com/tinyverse-web3/btcd v0.24.2 h1:Wj+tkuHwKc79kWcC65lZ/WZCE+VQG8fTcHBcHj8KjC8=
-github.com/tinyverse-web3/btcd v0.24.2/go.mod h1:FG4e9Oloq5UrxjB8MtMi6iicP3NJESyKSmju0bfzCbk=
+github.com/tinyverse-web3/btcd v0.24.3 h1:qasx5ezCk3gYgAdYQ/t9CHSq9vgYiiCdU5zMWzMnncU=
+github.com/tinyverse-web3/btcd v0.24.3/go.mod h1:cEn9nstLBByBtt4UuNpzTdJCq3aI5ntWx9yJnLdOmQk=
 github.com/tinyverse-web3/btcd/btcec/v2 v2.3.4 h1:Br+6N19q/ikl1L2X94Hf++Zw3YNe+4TKNyqPekgS1sg=
 github.com/tinyverse-web3/btcd/btcec/v2 v2.3.4/go.mod h1:/S/gJtj2TIX7ay22SuBQxnEJxsLS0NeLGtkb54gvHbA=
 github.com/tinyverse-web3/btcd/btcutil v1.1.6 h1:j35tTeB3U78AjL40/yRk8poBkFVfqWsUU+yvrX1LnOw=

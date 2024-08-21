@@ -14,7 +14,7 @@ require (
 	github.com/lightningnetwork/lnd/ticker v1.0.0
 	github.com/lightningnetwork/lnd/tlv v1.0.2
 	github.com/stretchr/testify v1.9.0
-	github.com/tinyverse-web3/btcd v0.24.2
+	github.com/tinyverse-web3/btcd v0.24.3
 	github.com/tinyverse-web3/btcd/btcec/v2 v2.3.4
 	github.com/tinyverse-web3/btcd/btcutil v1.1.6
 	github.com/tinyverse-web3/btcd/btcutil/psbt v1.1.9-testnet4
