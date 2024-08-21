@@ -1,8 +1,8 @@
 bdb
 ===
 
-[![Build Status](https://travis-ci.org/tinyverse-web3/btcwallet.png?branch=master)]
-(https://travis-ci.org/tinyverse-web3/btcwallet)
+[![Build Status](https://travis-ci.org/btcsuite/btcwallet.png?branch=master)]
+(https://travis-ci.org/btcsuite/btcwallet)
 
 Package bdb implements an driver for walletdb that uses boltdb for the backing
 datastore.  Package bdb is licensed under the copyfree ISC license.

@@ -22,7 +22,7 @@ require (
 	github.com/tinyverse-web3/btcwallet/wallet/txauthor v1.3.4
 	github.com/tinyverse-web3/btcwallet/wallet/txrules v1.2.0
 	github.com/tinyverse-web3/btcwallet/wallet/txsizes v1.2.3
-	github.com/tinyverse-web3/btcwallet/walletdb v1.4.0
+	github.com/tinyverse-web3/btcwallet/walletdb v1.4.2
 	github.com/tinyverse-web3/btcwallet/wtxmgr v1.5.2
 	golang.org/x/crypto v0.26.0
 	golang.org/x/net v0.24.0
@@ -33,12 +33,7 @@ require (
 
 require (
 	github.com/aead/siphash v1.0.1 // indirect
-	github.com/btcsuite/btcd v0.23.3 // indirect
-	github.com/btcsuite/btcd/btcec/v2 v2.1.3 // indirect
-	github.com/btcsuite/btcd/btcutil v1.1.1 // indirect
-	github.com/btcsuite/btcd/chaincfg/chainhash v1.0.1 // indirect
-	github.com/btcsuite/btcwallet/walletdb v1.3.5 // indirect
-	github.com/btcsuite/btcwallet/wtxmgr v1.5.0 // indirect
+	github.com/tinyverse-web3/btcwallet/wtxmgr v1.5.0 // indirect
 	github.com/btcsuite/go-socks v0.0.0-20170105172521-4720035b7bfd // indirect
 	github.com/decred/dcrd/crypto/blake256 v1.0.1 // indirect
 	github.com/decred/dcrd/lru v1.1.3 // indirect

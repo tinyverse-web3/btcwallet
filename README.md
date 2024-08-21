@@ -30,7 +30,7 @@ encryption will extend to transactions as well.
 btcwallet is not an SPV client and requires connecting to a local or
 remote btcd instance for asynchronous blockchain queries and
 notifications over websockets.  Full btcd installation instructions
-can be found [here](https://github.com/btcsuite/btcd).  An alternative
+can be found [here](https://github.com/tinyverse-web3/btcd).  An alternative
 SPV mode that is compatible with btcd and Bitcoin Core is planned for
 a future release.
 
@@ -64,7 +64,7 @@ Wallet clients can use one of two RPC servers:
 
 Install the latest MSIs available here:
 
-https://github.com/btcsuite/btcd/releases
+https://github.com/tinyverse-web3/btcd/releases
 
 https://github.com/tinyverse-web3/btcwallet/releases
 
@@ -158,7 +158,7 @@ PS> $editor $env:LOCALAPPDATA\Btcwallet\btcwallet.conf
 
 Linux/BSD/POSIX (Installed from source):
 ```bash
-$ cp $GOPATH/src/github.com/btcsuite/btcd/sample-btcd.conf ~/.btcd/btcd.conf
+$ cp $GOPATH/src/github.com/tinyverse-web3/btcd/sample-btcd.conf ~/.btcd/btcd.conf
 $ cp $GOPATH/src/github.com/tinyverse-web3/btcwallet/sample-btcwallet.conf ~/.btcwallet/btcwallet.conf
 $ $EDITOR ~/.btcd/btcd.conf
 $ $EDITOR ~/.btcwallet/btcwallet.conf
@@ -213,10 +213,10 @@ git push origin --delete wtxmgr/v1.5.2
 git tag wtxmgr/v1.5.2
 git push origin wtxmgr/v1.5.2
 
-git tag -d walletdb/v1.4.0
-git push origin --delete walletdb/v1.4.0
-git tag walletdb/v1.4.0
-git push origin walletdb/v1.4.0
+git tag -d walletdb/v1.4.2
+git push origin --delete walletdb/v1.4.2
+git tag walletdb/v1.4.2
+git push origin walletdb/v1.4.2
 
 git tag -d wallet/txsizes/v1.2.3
 git push origin --delete wallet/txsizes/v1.2.3

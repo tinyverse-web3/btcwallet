@@ -1,8 +1,8 @@
 walletdb
 ========
 
-[![Build Status](https://travis-ci.org/tinyverse-web3/btcwallet.png?branch=master)]
-(https://travis-ci.org/tinyverse-web3/btcwallet)
+[![Build Status](https://travis-ci.org/btcsuite/btcwallet.png?branch=master)]
+(https://travis-ci.org/btcsuite/btcwallet)
 
 Package walletdb provides a namespaced database interface for btcwallet.
 

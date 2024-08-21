@@ -57,7 +57,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/btcsuite/btcd/btcutil"
+	"github.com/tinyverse-web3/btcd/btcutil"
 )
 
 var certificateFile = filepath.Join(btcutil.AppDataDir("btcwallet", false), "rpc.cert")
