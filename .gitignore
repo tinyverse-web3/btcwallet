@@ -1,0 +1,5 @@
+btcwallet
+vendor
+.idea
+coverage.txt
+*.swp
