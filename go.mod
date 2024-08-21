@@ -11,7 +11,7 @@ require (
 	github.com/tinyverse-web3/btcwallet/wallet/txrules v1.2.0
 	github.com/tinyverse-web3/btcwallet/wallet/txsizes v1.2.3
 	github.com/tinyverse-web3/btcwallet/walletdb v1.4.0
-	github.com/tinyverse-web3/btcwallet/wtxmgr v1.5.1
+	github.com/tinyverse-web3/btcwallet/wtxmgr v1.5.2
 	github.com/btcsuite/websocket v0.0.0-20150119174127-31079b680792
 	github.com/davecgh/go-spew v1.1.1
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.0.1

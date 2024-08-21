@@ -208,10 +208,10 @@ git push origin --delete v0.16.9
 git tag v0.16.9
 git push origin v0.16.9
 
-git tag -d wtxmgr/v1.5.1
-git push origin --delete wtxmgr/v1.5.1
-git tag wtxmgr/v1.5.1
-git push origin wtxmgr/v1.5.1
+git tag -d wtxmgr/v1.5.2
+git push origin --delete wtxmgr/v1.5.2
+git tag wtxmgr/v1.5.2
+git push origin wtxmgr/v1.5.2
 
 git tag -d walletdb/v1.4.0
 git push origin --delete walletdb/v1.4.0
