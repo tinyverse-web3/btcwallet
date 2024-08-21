@@ -2,7 +2,7 @@ module github.com/tinyverse-web3/btcwallet/wallet/txsizes
 
 go 1.22.1
 
-require github.com/tinyverse-web3/btcd v0.24.2
+require github.com/tinyverse-web3/btcd v0.24.2-testnet4
 
 require (
 	github.com/btcsuite/btclog v0.0.0-20170628155309-84c8d2346e9f // indirect
